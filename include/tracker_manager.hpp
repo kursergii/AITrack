@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <deque>
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
 
@@ -11,6 +12,8 @@
 
 class TrackerManager {
 public:
+    static const int MAX_TRAJECTORY_LENGTH = 300;  // ~10 seconds at 30fps
+
     struct TrackedObject {
         int id;
         cv::Rect bbox;
@@ -23,6 +26,9 @@ public:
         cv::Ptr<cv::TrackerNano> tracker;
         KalmanPredictor predictor;
         ObjectMotion motion;
+
+        // Position history for trajectory map
+        std::deque<cv::Point2f> trajectory;
 
         // Status
         bool active;

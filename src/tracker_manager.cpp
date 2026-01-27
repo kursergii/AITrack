@@ -117,6 +117,12 @@ void TrackerManager::updateTrackers(const cv::Mat& frame, const CameraMotion& ca
                 track.bbox.x + track.bbox.width / 2.0f,
                 track.bbox.y + track.bbox.height / 2.0f);
             track.predictor.update(center, track.motion.envMotion);
+
+            // Record position in trajectory
+            track.trajectory.push_back(center);
+            if (track.trajectory.size() > MAX_TRAJECTORY_LENGTH) {
+                track.trajectory.pop_front();
+            }
         } else {
             track.framesLost++;
         }
@@ -152,9 +158,10 @@ int TrackerManager::addTrack(const cv::Mat& frame, const cv::Rect& bbox,
         track.tracker->init(frame, bbox);
     }
 
-    // Initialize predictor
+    // Initialize predictor and trajectory
     cv::Point2f center(bbox.x + bbox.width / 2.0f, bbox.y + bbox.height / 2.0f);
     track.predictor.init(center);
+    track.trajectory.push_back(center);
 
     int id = track.id;
     trackedObjects.push_back(std::move(track));
@@ -262,11 +269,13 @@ void TrackerManager::createTrack(const cv::Mat& frame, const Detector::Detection
         track.tracker->init(frame, detection.bbox);
     }
 
-    // Initialize predictor
+    // Initialize predictor and trajectory
     cv::Point2f center(detection.bbox.x + detection.bbox.width / 2.0f,
                        detection.bbox.y + detection.bbox.height / 2.0f);
     track.predictor.init(center);
+    track.trajectory.push_back(center);
 
+    std::cout << "Auto-track: created track #" << track.id << " (" << detection.className << ")" << std::endl;
     trackedObjects.push_back(std::move(track));
 }
 
@@ -285,10 +294,16 @@ void TrackerManager::updateTrack(TrackedObject& track, const cv::Mat& frame,
     // Update motion
     track.motion = computeObjectMotion(track.prevBbox, track.bbox, cameraMotion);
 
-    // Update predictor
+    // Update predictor and trajectory
     cv::Point2f center(newBbox.x + newBbox.width / 2.0f,
                        newBbox.y + newBbox.height / 2.0f);
     track.predictor.update(center, track.motion.envMotion);
+
+    // Record position in trajectory
+    track.trajectory.push_back(center);
+    if (track.trajectory.size() > MAX_TRAJECTORY_LENGTH) {
+        track.trajectory.pop_front();
+    }
 }
 
 void TrackerManager::handleLostTracks() {

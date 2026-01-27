@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
 # Find OpenCV
-find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc video videoio tracking)
+find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc video videoio tracking dnn)
 
 # Source files
 set(SOURCES

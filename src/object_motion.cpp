@@ -23,8 +23,8 @@ ObjectMotion computeObjectMotion(const cv::Rect& prevBbox, const cv::Rect& currB
     motion.magnitude = std::sqrt(motion.envMotion.x * motion.envMotion.x +
                                   motion.envMotion.y * motion.envMotion.y);
 
-    // Determine direction (threshold to filter noise)
-    const float threshold = 2.0f;
+    // Determine direction (lower threshold to detect small movements)
+    const float threshold = 1.0f;
     if (motion.magnitude < threshold) {
         motion.directionName = "STILL";
     } else {

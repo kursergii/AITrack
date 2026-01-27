@@ -52,11 +52,23 @@ void drawMotionIndicator(cv::Mat& frame, const cv::Point2f& direction, float mag
 
     // Draw arrow if moving
     if (magnitude > threshold) {
-        float scale = std::min(magnitude * 3.0f, static_cast<float>(radius - 5));
+        // Scale arrow: use log scale for better visualization of both slow and fast motion
+        // log(1 + mag) gives ~0.7 for mag=1, ~2.4 for mag=10, ~4.6 for mag=100
+        float logMag = std::log(1.0f + magnitude);
+        float scale = std::min(logMag * 15.0f, static_cast<float>(radius - 5));
+
         cv::Point2f dir = direction / magnitude;
         cv::Point arrowEnd(center.x + static_cast<int>(dir.x * scale),
                           center.y + static_cast<int>(dir.y * scale));
-        cv::arrowedLine(frame, center, arrowEnd, color, 3, cv::LINE_AA, 0, 0.3);
+
+        // Thicker arrow for faster movement
+        int thickness = std::min(2 + static_cast<int>(magnitude / 10.0f), 5);
+        cv::arrowedLine(frame, center, arrowEnd, color, thickness, cv::LINE_AA, 0, 0.3);
+
+        // Show magnitude value
+        std::string magText = std::to_string(static_cast<int>(magnitude));
+        cv::putText(frame, magText, cv::Point(center.x - 10, center.y + radius + 15),
+                   cv::FONT_HERSHEY_SIMPLEX, 0.35, color, 1);
     } else {
         // Draw dot for still
         cv::circle(frame, center, 5, cv::Scalar(0, 255, 0), -1);
