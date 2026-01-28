@@ -1,3 +1,12 @@
+/**
+ * @file detector.hpp
+ * @brief YOLO object detector wrapper for OpenCV DNN.
+ *
+ * Supports YOLOv5, YOLOv8, and YOLOv11 ONNX models with automatic format detection.
+ * Handles letterbox preprocessing to maintain aspect ratio and supports CUDA,
+ * OpenCL, and CPU backends for inference.
+ */
+
 #pragma once
 
 #include <vector>
@@ -5,9 +14,19 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
 
-// YOLO-based object detector (supports YOLOv5/v8/v11 ONNX models)
+/**
+ * @class Detector
+ * @brief YOLO-based object detector supporting YOLOv5/v8/v11 ONNX models.
+ *
+ * Preprocessing: Letterbox resize maintains aspect ratio with gray padding (114).
+ * Postprocessing: Auto-detects output format (v5 vs v8/v11) and applies NMS.
+ */
 class Detector {
 public:
+    // Preprocessing constants
+    static constexpr int LETTERBOX_PAD_VALUE = 114;      // Standard YOLO padding (gray)
+    static constexpr double NORMALIZATION_FACTOR = 1.0 / 255.0;
+
     struct Detection {
         cv::Rect bbox;
         int classId;
@@ -29,8 +48,13 @@ public:
     void setNmsThreshold(float thresh) { nmsThreshold = thresh; }
     void setInputSize(int size) { inputSize = size; }
 
+    // Backend selection (call before load() or use tryEnableGPU() after load())
+    void setBackend(cv::dnn::Backend backend, cv::dnn::Target target);
+    bool tryEnableGPU();  // Auto-detect and enable CUDA/OpenCL if available
+
     float getConfidenceThreshold() const { return confidenceThreshold; }
     bool isLoaded() const { return loaded; }
+    std::string getBackendName() const;
 
 private:
     cv::dnn::Net net;
@@ -41,6 +65,10 @@ private:
     float confidenceThreshold;
     float nmsThreshold;
     int inputSize;
+
+    // Backend
+    cv::dnn::Backend backend;
+    cv::dnn::Target target;
 
     // Letterbox state (for coordinate conversion)
     float letterboxScale;

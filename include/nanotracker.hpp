@@ -1,9 +1,25 @@
+/**
+ * @file nanotracker.hpp
+ * @brief Wrapper for OpenCV's NanoTracker visual object tracker.
+ *
+ * NanoTracker is a lightweight siamese-network based tracker that provides
+ * fast and accurate single-object tracking. This wrapper simplifies the
+ * initialization and update interface.
+ */
+
 #pragma once
 
 #include <string>
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
 
+/**
+ * @class NanoTracker
+ * @brief Wrapper for cv::TrackerNano providing simplified interface.
+ *
+ * Encapsulates NanoTracker model loading, initialization on ROI, and
+ * frame-by-frame updates. Requires ONNX models for backbone and neckhead.
+ */
 class NanoTracker {
 public:
     NanoTracker();

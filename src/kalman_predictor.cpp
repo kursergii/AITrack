@@ -1,6 +1,18 @@
+/**
+ * @file kalman_predictor.cpp
+ * @brief Kalman filter-based motion predictor implementation.
+ *
+ * Uses a constant velocity model for position prediction with additional
+ * velocity smoothing (EMA + median) for stable trajectory forecasting.
+ */
+
 #include "kalman_predictor.hpp"
 #include <algorithm>
 #include <cmath>
+
+// ============================================================================
+// Constructor - Kalman Filter Setup
+// ============================================================================
 
 KalmanPredictor::KalmanPredictor()
     : initialized(false), updateCount(0),
@@ -22,18 +34,23 @@ KalmanPredictor::KalmanPredictor()
 
     // Process noise - lower values = smoother but slower response
     kf.processNoiseCov = (cv::Mat_<float>(4, 4) <<
-        0.05f, 0,     0,    0,
-        0,     0.05f, 0,    0,
-        0,     0,     0.5f, 0,
-        0,     0,     0,    0.5f);
+        PROCESS_NOISE_POSITION, 0,                     0,                     0,
+        0,                      PROCESS_NOISE_POSITION, 0,                     0,
+        0,                      0,                      PROCESS_NOISE_VELOCITY, 0,
+        0,                      0,                      0,                      PROCESS_NOISE_VELOCITY);
 
     // Measurement noise - higher = trust measurements less
-    cv::setIdentity(kf.measurementNoiseCov, cv::Scalar::all(10.0f));
+    cv::setIdentity(kf.measurementNoiseCov, cv::Scalar::all(MEASUREMENT_NOISE));
 
     // Initial error covariance
     cv::setIdentity(kf.errorCovPost, cv::Scalar::all(1));
 }
 
+// ============================================================================
+// Initialization / Reset
+// ============================================================================
+
+/// Initialize Kalman filter with starting position (zero velocity)
 void KalmanPredictor::init(const cv::Point2f& pos) {
     kf.statePost = (cv::Mat_<float>(4, 1) << pos.x, pos.y, 0, 0);
     prevPosition = pos;
@@ -53,6 +70,16 @@ void KalmanPredictor::reset() {
     cv::setIdentity(kf.errorCovPost, cv::Scalar::all(1));
 }
 
+// ============================================================================
+// Update
+// ============================================================================
+
+/**
+ * @brief Update Kalman filter with new measurement.
+ *
+ * Runs predict-correct cycle, then updates velocity history and computes
+ * smoothed/stable velocity for trajectory prediction.
+ */
 void KalmanPredictor::update(const cv::Point2f& measuredPos, const cv::Point2f& envVelocity) {
     if (!initialized) {
         init(measuredPos);
@@ -73,11 +100,10 @@ void KalmanPredictor::update(const cv::Point2f& measuredPos, const cv::Point2f& 
     }
 
     // Compute smoothed velocity (exponential moving average)
-    float alpha = 0.25f;  // Lower alpha = more smoothing
-    smoothedVelocity = smoothedVelocity * (1.0f - alpha) + envVelocity * alpha;
+    smoothedVelocity = smoothedVelocity * (1.0f - EMA_ALPHA) + envVelocity * EMA_ALPHA;
 
     // Compute extra-stable velocity using median of history
-    if (velocityHistory.size() >= 5) {
+    if (velocityHistory.size() >= MIN_HISTORY_FOR_MEDIAN) {
         stableVelocity = computeMedianVelocity();
     } else {
         stableVelocity = smoothedVelocity;
@@ -87,6 +113,11 @@ void KalmanPredictor::update(const cv::Point2f& measuredPos, const cv::Point2f& 
     updateCount++;
 }
 
+// ============================================================================
+// Velocity Computation
+// ============================================================================
+
+/// Compute median velocity from history (robust to outliers)
 cv::Point2f KalmanPredictor::computeMedianVelocity() const {
     if (velocityHistory.empty()) return cv::Point2f(0, 0);
 
@@ -114,27 +145,38 @@ cv::Point2f KalmanPredictor::getVelocity() const {
     return stableVelocity;
 }
 
+// ============================================================================
+// Prediction
+// ============================================================================
+
+/**
+ * @brief Predict future positions.
+ *
+ * Uses blended stable/smoothed velocity with per-frame decay to predict
+ * trajectory. Returns empty if insufficient updates or inconsistent velocity.
+ */
 std::vector<cv::Point2f> KalmanPredictor::predictPath(int numFrames) const {
     std::vector<cv::Point2f> path;
 
-    if (!initialized || updateCount < 10) return path;
+    if (!initialized || updateCount < MIN_UPDATES_FOR_PREDICTION) return path;
 
     // Use Kalman position and stable velocity for prediction
     cv::Point2f pos = getPosition();
 
     // Blend smoothed and stable velocity for best results
-    cv::Point2f vel = stableVelocity * 0.7f + smoothedVelocity * 0.3f;
+    cv::Point2f vel = stableVelocity * STABLE_VELOCITY_WEIGHT +
+                      smoothedVelocity * SMOOTHED_VELOCITY_WEIGHT;
 
     // Only predict if there's meaningful and consistent velocity
     float speed = std::sqrt(vel.x * vel.x + vel.y * vel.y);
-    if (speed < 1.0f) return path;
+    if (speed < MIN_SPEED_FOR_PREDICTION) return path;
 
     // Check velocity consistency
     float consistency = computeVelocityConsistency();
-    if (consistency < 0.3f) return path;
+    if (consistency < MIN_CONSISTENCY) return path;
 
     // Predict future positions with velocity decay
-    float decay = 0.97f;
+    float decay = VELOCITY_DECAY;
     for (int i = 1; i <= numFrames; i++) {
         pos = pos + vel;
         vel = vel * decay;
@@ -144,8 +186,13 @@ std::vector<cv::Point2f> KalmanPredictor::predictPath(int numFrames) const {
     return path;
 }
 
+// ============================================================================
+// Confidence
+// ============================================================================
+
+/// Compute how consistent velocity has been (0-1 based on variance)
 float KalmanPredictor::computeVelocityConsistency() const {
-    if (velocityHistory.size() < 5) return 0.0f;
+    if (velocityHistory.size() < MIN_HISTORY_FOR_MEDIAN) return 0.0f;
 
     // Compute variance of velocity
     cv::Point2f mean(0, 0);
@@ -163,24 +210,28 @@ float KalmanPredictor::computeVelocityConsistency() const {
 
     // Also check if velocity direction is consistent
     float meanSpeed = std::sqrt(mean.x * mean.x + mean.y * mean.y);
-    if (meanSpeed < 0.5f) return 0.0f;
+    constexpr float MIN_MEAN_SPEED = 0.5f;
+    if (meanSpeed < MIN_MEAN_SPEED) return 0.0f;
 
     // Lower variance relative to speed = higher consistency
+    constexpr float VARIANCE_SCALE = 2.0f;
     float relativeVariance = variance / (meanSpeed * meanSpeed + 1.0f);
-    return 1.0f / (1.0f + relativeVariance * 2.0f);
+    return 1.0f / (1.0f + relativeVariance * VARIANCE_SCALE);
 }
 
+/// Get prediction confidence based on consistency, update count, and speed
 float KalmanPredictor::getConfidence() const {
-    if (!initialized || updateCount < 12) return 0.0f;
+    if (!initialized || updateCount < MIN_UPDATES_FOR_CONFIDENCE) return 0.0f;
 
     float speed = std::sqrt(stableVelocity.x * stableVelocity.x +
                             stableVelocity.y * stableVelocity.y);
 
-    if (speed < 1.0f) return 0.0f;
+    if (speed < MIN_SPEED_FOR_CONFIDENCE) return 0.0f;
 
     float consistency = computeVelocityConsistency();
-    float countFactor = std::min(1.0f, (updateCount - 10) / 20.0f);
-    float speedFactor = std::min(1.0f, speed / 8.0f);
+    constexpr float COUNT_RAMP_FRAMES = 20.0f;
+    float countFactor = std::min(1.0f, (updateCount - MIN_UPDATES_FOR_PREDICTION) / COUNT_RAMP_FRAMES);
+    float speedFactor = std::min(1.0f, speed / SPEED_FACTOR_SCALE);
 
-    return consistency * countFactor * (0.4f + 0.6f * speedFactor);
+    return consistency * countFactor * (CONFIDENCE_BASE + CONFIDENCE_SPEED_WEIGHT * speedFactor);
 }

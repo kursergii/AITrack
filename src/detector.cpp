@@ -1,20 +1,102 @@
+/**
+ * @file detector.cpp
+ * @brief Implementation of YOLO object detector using OpenCV DNN.
+ *
+ * Supports YOLOv5, YOLOv8, and YOLOv11 ONNX models. Auto-detects output format
+ * and handles letterbox preprocessing for proper aspect ratio preservation.
+ */
+
 #include "detector.hpp"
 #include <fstream>
 #include <iostream>
+#include <opencv2/core/ocl.hpp>
+
+// ============================================================================
+// Constructor / Destructor
+// ============================================================================
 
 Detector::Detector()
     : loaded(false), confidenceThreshold(0.5f), nmsThreshold(0.45f), inputSize(640),
+      backend(cv::dnn::DNN_BACKEND_OPENCV), target(cv::dnn::DNN_TARGET_CPU),
       letterboxScale(1.0f), letterboxPadX(0), letterboxPadY(0) {
 }
 
 Detector::~Detector() {
 }
 
+// ============================================================================
+// Backend Configuration
+// ============================================================================
+
+/// Set compute backend manually (CUDA, OpenCL, or CPU)
+void Detector::setBackend(cv::dnn::Backend b, cv::dnn::Target t) {
+    backend = b;
+    target = t;
+    if (loaded) {
+        net.setPreferableBackend(backend);
+        net.setPreferableTarget(target);
+    }
+}
+
+/**
+ * @brief Auto-detect and enable GPU acceleration.
+ * @return true if GPU enabled, false if falling back to CPU
+ *
+ * Priority: CUDA > OpenCL > CPU
+ */
+bool Detector::tryEnableGPU() {
+    // Check if CUDA is available (OpenCV must be built with CUDA support)
+    int cudaDevices = cv::cuda::getCudaEnabledDeviceCount();
+    if (cudaDevices > 0) {
+        backend = cv::dnn::DNN_BACKEND_CUDA;
+        target = cv::dnn::DNN_TARGET_CUDA;
+        if (loaded) {
+            net.setPreferableBackend(backend);
+            net.setPreferableTarget(target);
+        }
+        std::cout << "CUDA backend enabled (" << cudaDevices << " device(s))" << std::endl;
+        return true;
+    }
+
+    // Check if OpenCL is available
+    if (cv::ocl::haveOpenCL()) {
+        backend = cv::dnn::DNN_BACKEND_OPENCV;
+        target = cv::dnn::DNN_TARGET_OPENCL;
+        if (loaded) {
+            net.setPreferableBackend(backend);
+            net.setPreferableTarget(target);
+        }
+        std::cout << "OpenCL backend enabled" << std::endl;
+        return true;
+    }
+
+    // Fall back to CPU
+    backend = cv::dnn::DNN_BACKEND_OPENCV;
+    target = cv::dnn::DNN_TARGET_CPU;
+    if (loaded) {
+        net.setPreferableBackend(backend);
+        net.setPreferableTarget(target);
+    }
+    std::cout << "Using CPU backend" << std::endl;
+    return false;
+}
+
+std::string Detector::getBackendName() const {
+    if (target == cv::dnn::DNN_TARGET_CUDA) return "CUDA";
+    if (target == cv::dnn::DNN_TARGET_OPENCL) return "OpenCL";
+    return "CPU";
+}
+
+// ============================================================================
+// Model Loading
+// ============================================================================
+
+/// Load YOLO ONNX model and optionally class names from file
 bool Detector::load(const std::string& modelPath, const std::string& classesPath) {
     try {
         net = cv::dnn::readNetFromONNX(modelPath);
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        net.setPreferableBackend(backend);
+        net.setPreferableTarget(target);
 
         // Load class names if provided
         if (!classesPath.empty()) {
@@ -59,6 +141,17 @@ bool Detector::load(const std::string& modelPath, const std::string& classesPath
     }
 }
 
+// ============================================================================
+// Detection Pipeline
+// ============================================================================
+
+/**
+ * @brief Preprocess frame for YOLO input.
+ *
+ * Letterbox resize: scales image to fit inputSize while maintaining aspect ratio,
+ * then pads with gray (114) to create a square image. Saves scale/padding info
+ * for coordinate conversion in postprocess.
+ */
 cv::Mat Detector::preprocess(const cv::Mat& frame) {
     // Letterbox resize: maintain aspect ratio with padding
     int imgWidth = frame.cols;
@@ -80,17 +173,19 @@ cv::Mat Detector::preprocess(const cv::Mat& frame) {
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(newWidth, newHeight), 0, 0, cv::INTER_LINEAR);
 
-    // Create letterbox image with gray padding (114 is standard YOLO padding)
-    cv::Mat letterboxed(inputSize, inputSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    // Create letterbox image with gray padding
+    cv::Mat letterboxed(inputSize, inputSize, CV_8UC3,
+                        cv::Scalar(LETTERBOX_PAD_VALUE, LETTERBOX_PAD_VALUE, LETTERBOX_PAD_VALUE));
     resized.copyTo(letterboxed(cv::Rect(letterboxPadX, letterboxPadY, newWidth, newHeight)));
 
     // Convert to blob: normalize, swap RB, CHW format
     cv::Mat blob;
-    cv::dnn::blobFromImage(letterboxed, blob, 1.0/255.0, cv::Size(inputSize, inputSize),
+    cv::dnn::blobFromImage(letterboxed, blob, NORMALIZATION_FACTOR, cv::Size(inputSize, inputSize),
                            cv::Scalar(), true, false);
     return blob;
 }
 
+/// Run detection on a frame (preprocess -> forward -> postprocess)
 std::vector<Detector::Detection> Detector::detect(const cv::Mat& frame) {
     std::vector<Detection> detections;
 
@@ -110,6 +205,16 @@ std::vector<Detector::Detection> Detector::detect(const cv::Mat& frame) {
     return postprocess(frame, outputs);
 }
 
+/**
+ * @brief Postprocess YOLO output to extract detections.
+ *
+ * Auto-detects YOLOv5 vs v8/v11 format based on output tensor shape:
+ * - YOLOv8/v11: [1, 84, 8400] - needs transpose, no objectness score
+ * - YOLOv5: [1, 25200, 85] - has objectness score at index 4
+ *
+ * Applies confidence thresholding, coordinate conversion from letterbox
+ * to original image space, and Non-Maximum Suppression.
+ */
 std::vector<Detector::Detection> Detector::postprocess(const cv::Mat& frame,
                                                         const std::vector<cv::Mat>& outputs) {
     std::vector<Detection> detections;

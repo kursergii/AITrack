@@ -1,28 +1,129 @@
+/**
+ * @file application.cpp
+ * @brief Implementation of the main Application class.
+ *
+ * Handles video capture, frame processing, async detection, tracking updates,
+ * and UI rendering for the multi-object tracking system.
+ */
+
 #include "application.hpp"
 #include "visualization.hpp"
 #include <iostream>
 
+// ============================================================================
+// Constructor / Destructor
+// ============================================================================
+
 Application::Application()
     : running(false), paused(false), showTrajectoryMap(true),
       detectionEnabled(false), autoTrackDetections(false),
-      detectionInterval(10), frameCount(0), targetFps(30), actualFps(0) {
+      detectionInterval(10), frameCount(0), targetFps(30), actualFps(0),
+      detectionFrameReady(false), detectionsReady(false),
+      detectionThreadRunning(false) {
 }
 
 Application::~Application() {
+    stopDetectionThread();
     cap.release();
     cv::destroyAllWindows();
 }
 
+// ============================================================================
+// Async Detection Thread
+// ============================================================================
+
+/**
+ * @brief Start the async detection thread.
+ *
+ * Detection runs on a separate thread to avoid blocking the main render loop.
+ * Frames are submitted periodically and results are retrieved asynchronously.
+ */
+void Application::startDetectionThread() {
+    if (detectionThreadRunning || !detector.isLoaded()) return;
+
+    detectionThreadRunning = true;
+    detectionThread = std::thread(&Application::detectionThreadFunc, this);
+    std::cout << "Detection thread started" << std::endl;
+}
+
+void Application::stopDetectionThread() {
+    if (!detectionThreadRunning) return;
+
+    detectionThreadRunning = false;
+
+    // Wake up detection thread so it can exit
+    {
+        std::lock_guard<std::mutex> lock(detectionMutex);
+        detectionFrameReady = true;
+        detectionCv.notify_all();
+    }
+
+    if (detectionThread.joinable()) {
+        detectionThread.join();
+    }
+
+    std::cout << "Detection thread stopped" << std::endl;
+}
+
+/**
+ * @brief Detection thread main function.
+ *
+ * Waits for frames to be submitted, runs YOLO detection, and stores results
+ * for the main thread to retrieve. Uses condition variables for synchronization.
+ */
+void Application::detectionThreadFunc() {
+    while (detectionThreadRunning) {
+        cv::Mat frameToProcess;
+
+        // Wait for frame to process
+        {
+            std::unique_lock<std::mutex> lock(detectionMutex);
+            detectionCv.wait(lock, [this] {
+                return detectionFrameReady.load() || !detectionThreadRunning.load();
+            });
+
+            if (!detectionThreadRunning) break;
+
+            frameToProcess = detectionFrame.clone();
+            detectionFrameReady = false;
+        }
+
+        // Run detection (this is the expensive operation)
+        if (!frameToProcess.empty()) {
+            auto detections = detector.detect(frameToProcess);
+
+            // Store results
+            {
+                std::lock_guard<std::mutex> lock(detectionMutex);
+                pendingDetections = std::move(detections);
+                detectionsReady = true;
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+/**
+ * @brief Initialize the application.
+ * @param argc Command line argument count
+ * @param argv Command line arguments: [video_source] [yolo_model] [backbone] [neckhead]
+ * @return true if initialization successful, false otherwise
+ */
 bool Application::init(int argc, char** argv) {
-    // Parse arguments
-    videoSource = "../videos/car1.mp4";
+    // Parse command line arguments
     backbonePath = "../models/nanotrack_backbone_sim.onnx";
     neckheadPath = "../models/nanotrack_head_sim.onnx";
     yoloPath = "../models/yolo11n.onnx";
 
-    if (argc > 1) {
-        videoSource = argv[1];
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <video_source> [yolo_model] [backbone] [neckhead]" << std::endl;
+        std::cerr << "  video_source: path to video file or '0' for webcam" << std::endl;
+        return false;
     }
+    videoSource = argv[1];
     if (argc > 2) {
         yoloPath = argv[2];
     }
@@ -50,8 +151,10 @@ bool Application::init(int argc, char** argv) {
     if (detector.load(yoloPath)) {
         detector.setConfidenceThreshold(0.5f);
         detector.setInputSize(640);
+        detector.tryEnableGPU();  // Try GPU acceleration
         detectionEnabled = true;
-        std::cout << "YOLO detection enabled" << std::endl;
+        autoTrackDetections = true;  // Auto-track detected objects by default
+        std::cout << "YOLO detection enabled with auto-tracking (" << detector.getBackendName() << ")" << std::endl;
     } else {
         std::cout << "YOLO model not found, detection disabled" << std::endl;
         std::cout << "To enable: place yolo11n.onnx in models/ folder" << std::endl;
@@ -80,14 +183,27 @@ bool Application::init(int argc, char** argv) {
     std::cout << "Controls: 'q' quit, 'a' add, 'c' clear, 'd' detect, 't' auto-track, 'm' map, SPACE pause" << std::endl;
 
     running = true;
+
+    // Start async detection thread if detector is loaded
+    if (detector.isLoaded()) {
+        startDetectionThread();
+    }
+
     return true;
 }
 
+/**
+ * @brief Allow user to manually select an object to track.
+ * @return true if selection was made, false if cancelled
+ *
+ * Opens an interactive ROI selection dialog. Existing tracks are drawn
+ * on the selection frame for reference.
+ */
 bool Application::selectROI() {
     std::cout << "Select object to track and press ENTER or SPACE" << std::endl;
     std::cout << "Press C to cancel selection" << std::endl;
 
-    // Read fresh frame for ROI selection
+    // Read a fresh frame for selection
     cv::Mat newFrame;
     cap >> newFrame;
     if (newFrame.empty()) {
@@ -130,6 +246,17 @@ bool Application::selectROI() {
     return true;
 }
 
+// ============================================================================
+// Main Loop
+// ============================================================================
+
+/**
+ * @brief Main application loop.
+ * @return Exit code (0 for success)
+ *
+ * Runs the capture-process-render loop until user quits or video ends.
+ * Uses waitKey delay to maintain target FPS.
+ */
 int Application::run() {
     while (running) {
         if (!paused) {
@@ -148,9 +275,18 @@ int Application::run() {
         handleInput(key);
     }
 
+    stopDetectionThread();
     return 0;
 }
 
+/**
+ * @brief Process a single frame.
+ *
+ * 1. Compute camera motion using optical flow
+ * 2. Check for async detection results
+ * 3. Submit new frame to detection thread periodically
+ * 4. Update trackers with or without detections
+ */
 void Application::processFrame() {
     double timer = cv::getTickCount();
     frameCount++;
@@ -162,25 +298,51 @@ void Application::processFrame() {
     }
     currGray.copyTo(prevGray);
 
-    // Run detection periodically if enabled
-    if (detectionEnabled && detector.isLoaded() && (frameCount % detectionInterval == 0)) {
-        lastDetections = detector.detect(frame);
-
-        // Auto-track new detections if enabled
-        if (autoTrackDetections && !lastDetections.empty()) {
-            trackerManager.update(frame, lastDetections, cameraMotion);
-        } else {
-            trackerManager.updateTrackers(frame, cameraMotion);
+    // Check for async detection results first
+    bool hasNewDetections = false;
+    {
+        std::lock_guard<std::mutex> lock(detectionMutex);
+        if (detectionsReady) {
+            lastDetections = std::move(pendingDetections);
+            detectionsReady = false;
+            hasNewDetections = true;
         }
+    }
+
+    // Send frame to detection thread periodically (if not already processing)
+    if (detectionEnabled && detector.isLoaded() && (frameCount % detectionInterval == 0)) {
+        std::lock_guard<std::mutex> lock(detectionMutex);
+        if (!detectionFrameReady) {
+            detectionFrame = frame.clone();
+            detectionFrameReady = true;
+            detectionCv.notify_one();
+        }
+    }
+
+    // Update trackers with or without detections
+    if (hasNewDetections && autoTrackDetections && !lastDetections.empty()) {
+        trackerManager.update(frame, lastDetections, cameraMotion);
     } else {
-        // Just update trackers
         trackerManager.updateTrackers(frame, cameraMotion);
     }
 
     actualFps = cv::getTickFrequency() / (cv::getTickCount() - timer);
 }
 
+// ============================================================================
+// Rendering
+// ============================================================================
+
+/**
+ * @brief Render the current frame with all visualizations.
+ *
+ * Draws tracked objects with bounding boxes, labels, and predicted paths.
+ * Also shows FPS, track count, motion indicators, and trajectory map.
+ */
 void Application::render() {
+    // Don't render if frame is empty
+    if (frame.empty()) return;
+
     const auto& trackedObjects = trackerManager.getTrackedObjects();
     int activeCount = trackerManager.getActiveCount();
 
@@ -263,6 +425,25 @@ void Application::render() {
     cv::imshow("AITrack - Multi-Object Tracker", frame);
 }
 
+// ============================================================================
+// Input Handling
+// ============================================================================
+
+/**
+ * @brief Handle keyboard input.
+ * @param key Pressed key character
+ *
+ * Controls:
+ * - q/ESC: Quit
+ * - a/r: Add new track (ROI selection)
+ * - c: Clear all tracks
+ * - +/-: Adjust target FPS
+ * - SPACE: Pause/resume
+ * - m: Toggle trajectory map
+ * - d: Toggle detection
+ * - t: Toggle auto-tracking
+ * - [/]: Adjust detection threshold
+ */
 void Application::handleInput(char key) {
     switch (key) {
         case 'q':
@@ -320,18 +501,27 @@ void Application::handleInput(char key) {
 
         case '[':
             detector.setConfidenceThreshold(
-                std::max(0.1f, detector.getConfidenceThreshold() - 0.1f));
+                std::max(MIN_CONFIDENCE_THRESHOLD,
+                         detector.getConfidenceThreshold() - CONFIDENCE_STEP));
             std::cout << "Detection threshold: " << detector.getConfidenceThreshold() << std::endl;
             break;
 
         case ']':
             detector.setConfidenceThreshold(
-                std::min(0.9f, detector.getConfidenceThreshold() + 0.1f));
+                std::min(MAX_CONFIDENCE_THRESHOLD,
+                         detector.getConfidenceThreshold() + CONFIDENCE_STEP));
             std::cout << "Detection threshold: " << detector.getConfidenceThreshold() << std::endl;
             break;
     }
 }
 
+/**
+ * @brief Render the trajectory map overlay.
+ *
+ * Shows a minimap in the bottom-left corner with scaled trajectories
+ * of all tracked objects. Older positions fade out, current positions
+ * are shown as dots with track IDs.
+ */
 void Application::renderTrajectoryMap() {
     if (!showTrajectoryMap) return;
 
@@ -389,15 +579,21 @@ void Application::renderTrajectoryMap() {
                cv::FONT_HERSHEY_SIMPLEX, 0.35, cv::Scalar(150, 150, 150), 1);
 
     // Overlay map on frame (bottom-left corner)
-    int mapX = 10;
-    int mapY = frame.rows - MAP_HEIGHT - 10;
+    int mapX = MAP_OFFSET;
+    int mapY = frame.rows - MAP_HEIGHT - MAP_OFFSET;
 
     // Blend with transparency
-    double alpha = 0.8;
     cv::Mat roi = frame(cv::Rect(mapX, mapY, MAP_WIDTH, MAP_HEIGHT));
-    cv::addWeighted(mapBg, alpha, roi, 1.0 - alpha, 0, roi);
+    cv::addWeighted(mapBg, MAP_ALPHA, roi, 1.0 - MAP_ALPHA, 0, roi);
 }
 
+/**
+ * @brief Render detection boxes (when auto-tracking is disabled).
+ * @param detections Vector of detections to draw
+ *
+ * Draws corner brackets (instead of full boxes) to distinguish
+ * detections from tracked objects. Shows class name and confidence.
+ */
 void Application::renderDetections(const std::vector<Detector::Detection>& detections) {
     for (const auto& det : detections) {
         // Draw dashed rectangle for detections (not tracked yet)

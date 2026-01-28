@@ -17,9 +17,7 @@ compile_commands.json
 
 # macOS
 .DS_Store
-
-# Large binary files
-*.onnx
-*.mp4
-*.avi
-*.mov
+Thumbs.db
+.env
+logs/
+*.log

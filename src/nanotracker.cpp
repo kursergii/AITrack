@@ -1,3 +1,11 @@
+/**
+ * @file nanotracker.cpp
+ * @brief Wrapper implementation for OpenCV NanoTracker.
+ *
+ * Provides simplified interface for single-object tracking using
+ * NanoTracker (siamese network-based visual tracker).
+ */
+
 #include "nanotracker.hpp"
 #include <iostream>
 
