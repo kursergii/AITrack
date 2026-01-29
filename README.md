@@ -47,20 +47,24 @@ NanoTracker models are required for tracking. YOLO model is optional - without i
 ## Usage
 
 ```bash
-./bin/aitrack
-
-# Specify video source
+# Basic usage with video file
 ./bin/aitrack path/to/video.mp4
 
-# With YOLO model
-./bin/aitrack path/to/video.mp4 path/to/yolo.onnx
-
-# With all models
-./bin/aitrack video.mp4 yolo.onnx backbone.onnx neckhead.onnx
-
-# Use webcam
+# Use webcam (device 0)
 ./bin/aitrack 0
+
+# With custom YOLO model
+./bin/aitrack video.mp4 path/to/yolo.onnx
+
+# With all custom models
+./bin/aitrack video.mp4 yolo.onnx backbone.onnx neckhead.onnx
 ```
+
+**Arguments:**
+- `video_source` (required): Path to video file or camera index (e.g., `0` for webcam)
+- `yolo_model` (optional): Path to YOLO ONNX model (default: `../models/yolo11n.onnx`)
+- `backbone` (optional): Path to NanoTracker backbone (default: `../models/nanotrack_backbone_sim.onnx`)
+- `neckhead` (optional): Path to NanoTracker head (default: `../models/nanotrack_head_sim.onnx`)
 
 ## Controls
 
