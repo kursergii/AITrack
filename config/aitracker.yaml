@@ -1,0 +1,35 @@
+%YAML:1.0
+# AITracker Configuration
+# Edit this file to change tracker settings without recompiling
+
+# Tracker settings
+tracker:
+  max_lost_frames: 10        # Frames before track is lost (~1 sec at 30fps)
+  min_iou: 0.5               # Minimum IoU for detection-track matching
+  reinit_threshold: 0.7      # IoU threshold for tracker reinitialization
+  max_trajectory_length: 30 # Max positions in history (~10 sec at 30fps)
+
+# Detection settings
+detection:
+  confidence: 0.4            # YOLO confidence threshold
+  nms_threshold: 0.45        # Non-maximum suppression threshold
+  interval: 10               # Run detection every N frames
+  input_size: 640            # YOLO input size
+
+# Display settings
+display:
+  target_fps: 60
+  show_trajectory_map: false
+  auto_track_detections: false
+
+# Model paths (relative to AITrack project root or absolute)
+models:
+  yolo: models/yolo11n.onnx
+  nanotrack_backbone: models/nanotrack_backbone_sim.onnx
+  nanotrack_head: models/nanotrack_head_sim.onnx
+  classes_file: models/drones.names
+
+# Class filtering (empty = track all)
+classes:
+  allowed: []                # Only track these classes (e.g., ["drone", "bird"])
+  blocked: []                # Never track these classes (e.g., ["person"])

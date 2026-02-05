@@ -1,6 +1,6 @@
 # AITrack - Multi-Object Tracking System
 
-Real-time multi-object tracking combining YOLO detection with NanoTracker visual tracking, featuring motion prediction and trajectory visualization.
+Real-time multi-object tracking combining YOLO detection with NanoTracker visual tracking, featuring motion prediction, camera motion compensation, and trajectory visualization.
 
 ## Features
 
@@ -9,8 +9,11 @@ Real-time multi-object tracking combining YOLO detection with NanoTracker visual
 - **NanoTracker**: Fast siamese-network based visual tracking for each object
 - **Motion Prediction**: Kalman filter-based trajectory forecasting with visualization
 - **Camera Motion Compensation**: Optical flow-based camera motion estimation
+- **Object Motion Analysis**: True object motion in world coordinates (camera-compensated)
 - **Async Detection**: Non-blocking detection on separate thread for smooth playback
 - **GPU Acceleration**: Automatic CUDA/OpenCL backend selection
+- **YAML Configuration**: Runtime-configurable settings without recompiling
+- **Class Filtering**: Allow/block specific object classes for targeted tracking
 
 ## Requirements
 
@@ -30,7 +33,7 @@ cmake ..
 make
 ```
 
-The executable will be in `bin/aitrack`.
+The executable will be in `bin/aitracker`.
 
 ## Models
 
@@ -40,32 +43,49 @@ Place the following ONNX models in the `models/` folder:
 |-------|-------------|
 | `nanotrack_backbone_sim.onnx` | NanoTracker backbone network |
 | `nanotrack_head_sim.onnx` | NanoTracker head network |
-| `yolo11n.onnx` | YOLO detector (optional) |
+| `yolo11n.onnx` | YOLO detector (general objects) |
+| `drones.onnx` | YOLO detector (drone-specific, optional) |
 
 NanoTracker models are required for tracking. YOLO model is optional - without it, you can manually select objects to track.
 
 ## Usage
 
-```bash
-# Basic usage with video file
-./bin/aitrack path/to/video.mp4
+### Using the wrapper script (recommended)
 
-# Use webcam (device index: 0, 1, 2, ...)
-./bin/aitrack 0    # First camera
-./bin/aitrack 1    # Second camera
+The wrapper script reads config and resolves model paths automatically:
+
+```bash
+# Basic usage
+./scripts/aitracker.sh path/to/video.mp4
 
 # With custom YOLO model
-./bin/aitrack video.mp4 path/to/yolo.onnx
+./scripts/aitracker.sh video.mp4 path/to/custom_yolo.onnx
+
+# Webcam
+./scripts/aitracker.sh 0
+```
+
+### Direct binary usage
+
+```bash
+# Basic usage with video file
+./bin/aitracker path/to/video.mp4
+
+# Use webcam
+./bin/aitracker 0
+
+# With custom YOLO model
+./bin/aitracker video.mp4 path/to/yolo.onnx
 
 # With all custom models
-./bin/aitrack video.mp4 yolo.onnx backbone.onnx neckhead.onnx
+./bin/aitracker video.mp4 yolo.onnx backbone.onnx neckhead.onnx
 ```
 
 **Arguments:**
-- `video_source` (required): Path to video file or camera index (`0`, `1`, `2`, ...)
-- `yolo_model` (optional): Path to YOLO ONNX model (default: `../models/yolo11n.onnx`)
-- `backbone` (optional): Path to NanoTracker backbone (default: `../models/nanotrack_backbone_sim.onnx`)
-- `neckhead` (optional): Path to NanoTracker head (default: `../models/nanotrack_head_sim.onnx`)
+- `video_source` (required): Path to video file or `0` for webcam
+- `yolo_model` (optional): Path to YOLO ONNX model
+- `backbone` (optional): Path to NanoTracker backbone
+- `neckhead` (optional): Path to NanoTracker head
 
 ## Controls
 
@@ -81,81 +101,112 @@ NanoTracker models are required for tracking. YOLO model is optional - without i
 | `+` / `-` | Adjust target FPS |
 | `[` / `]` | Adjust detection threshold |
 
+## Configuration
+
+Settings can be configured via YAML config file at `config/aitracker.yaml`. The application searches for config in these locations (in order):
+
+1. `config/aitracker.yaml`
+2. `../config/aitracker.yaml`
+3. `aitracker.yaml`
+
+Command-line arguments override config file values.
+
+**Note:** OpenCV's FileStorage requires YAML files to start with `%YAML:1.0` as the first line.
+
+Example config:
+
+```yaml
+%YAML:1.0
+
+tracker:
+  max_lost_frames: 10       # Frames before track is removed
+  min_iou: 0.5              # Detection-track match threshold
+  reinit_threshold: 0.7     # IoU threshold for tracker reinitialization
+  max_trajectory_length: 30 # Max positions in trajectory history
+
+detection:
+  confidence: 0.5            # YOLO confidence threshold
+  nms_threshold: 0.45        # Non-maximum suppression threshold
+  interval: 10               # Run detection every N frames
+  input_size: 640            # YOLO input size
+
+display:
+  target_fps: 60
+  show_trajectory_map: false
+  auto_track_detections: false
+
+models:
+  yolo: models/drones.onnx
+  nanotrack_backbone: models/nanotrack_backbone_sim.onnx
+  nanotrack_head: models/nanotrack_head_sim.onnx
+
+classes:
+  allowed: ["drone"]         # Only track these classes (empty = all)
+  blocked: []                # Never track these classes
+```
+
 ## Architecture
 
 ```
 Application
     ├── VideoCapture (frame source)
+    ├── Config (YAML file + CLI overrides)
     ├── TrackerManager (multi-object tracking)
     │   ├── TrackedObject[]
     │   │   ├── NanoTracker (visual tracker)
     │   │   ├── KalmanPredictor (motion prediction)
+    │   │   ├── ObjectMotion (camera-compensated motion)
     │   │   └── trajectory (position history)
     │   └── Detection-Track matching (IoU-based)
     ├── Detector (YOLO, async thread)
     │   ├── Preprocess (letterbox)
+    │   ├── Forward (CUDA/OpenCL/CPU)
     │   └── Postprocess (NMS)
+    ├── CameraMotion (sparse optical flow)
     └── Visualization
         ├── Predicted paths
-        ├── Motion indicators
+        ├── Motion indicators (camera + object)
         └── Trajectory map
 ```
 
 ## Pipeline
 
 1. **Frame Capture**: Read frame from video/camera
-2. **Camera Motion**: Estimate global motion using optical flow
+2. **Camera Motion**: Estimate global motion using sparse optical flow (Lucas-Kanade)
 3. **Detection** (async): Run YOLO on separate thread every N frames
 4. **Tracking**:
    - Run NanoTracker on all active tracks
-   - Match new detections to existing tracks (IoU)
+   - Match new detections to existing tracks (greedy IoU matching)
    - Update matched tracks with detection positions
-   - Create new tracks for unmatched detections
+   - Create new tracks for unmatched detections (respecting class filters)
    - Remove tracks lost for too long
-5. **Prediction**: Kalman filter predicts future positions
-6. **Render**: Draw bounding boxes, predictions, and overlays
-
-## Configuration
-
-Key parameters in `include/config.hpp`:
-
-```cpp
-struct Config {
-    int maxLostFrames = 30;        // Frames before track removed
-    float minIoU = 0.3f;           // Detection-track match threshold
-    float detectionConfidence = 0.5f;
-    int detectionInterval = 10;    // Run detection every N frames
-    int targetFps = 30;
-};
-```
+5. **Motion Analysis**: Compute object motion with camera compensation
+6. **Prediction**: Kalman filter predicts future positions with velocity smoothing
+7. **Render**: Draw bounding boxes, predictions, motion indicators, and trajectory map
 
 ## File Structure
 
 ```
-aitrack/
+AITrack/
 ├── main.cpp                 # Entry point
+├── CMakeLists.txt           # Build configuration
 ├── include/
 │   ├── application.hpp      # Main application controller
+│   ├── config.hpp           # Configuration with YAML loading
 │   ├── tracker_manager.hpp  # Multi-object tracker
 │   ├── detector.hpp         # YOLO detector
 │   ├── kalman_predictor.hpp # Motion prediction
 │   ├── camera_motion.hpp    # Optical flow camera motion
 │   ├── object_motion.hpp    # Object motion compensation
 │   ├── visualization.hpp    # Drawing utilities
-│   ├── nanotracker.hpp      # NanoTracker wrapper
-│   └── config.hpp           # Configuration
-├── src/
-│   ├── application.cpp
-│   ├── tracker_manager.cpp
-│   ├── detector.cpp
-│   ├── kalman_predictor.cpp
-│   ├── camera_motion.cpp
-│   ├── object_motion.cpp
-│   ├── visualization.cpp
-│   └── nanotracker.cpp
+│   └── nanotracker.hpp      # NanoTracker wrapper
+├── src/                     # Implementation files
+├── config/
+│   └── aitracker.yaml       # Runtime configuration
+├── scripts/
+│   └── aitracker.sh         # Wrapper script
 ├── models/                  # ONNX model files
-├── videos/                  # Test videos
-└── CMakeLists.txt
+└── videos/                  # Test videos
 ```
 
 ## License

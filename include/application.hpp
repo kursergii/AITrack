@@ -21,6 +21,7 @@
 #include "tracker_manager.hpp"
 #include "camera_motion.hpp"
 #include "detector.hpp"
+#include "config.hpp"
 
 /**
  * @class Application
@@ -62,6 +63,9 @@ private:
 
     // Multi-object tracking
     TrackerManager trackerManager;
+
+    // Configuration
+    Config config;
 
     // Object detection
     Detector detector;

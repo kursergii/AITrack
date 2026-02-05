@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.0)
-project(aitrack VERSION 0.1.0 LANGUAGES C CXX)
+project(aitracker VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,7 +10,7 @@ find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc video videoio track
 
 # Source files
 set(SOURCES
-    main.cpp
+    src/main.cpp
     src/application.cpp
     src/camera_motion.cpp
     src/object_motion.cpp
@@ -21,6 +21,6 @@ set(SOURCES
     src/tracker_manager.cpp
 )
 
-add_executable(aitrack ${SOURCES})
-target_include_directories(aitrack PRIVATE ${CMAKE_SOURCE_DIR}/include ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(aitrack PRIVATE ${OpenCV_LIBS})
+add_executable(aitracker ${SOURCES})
+target_include_directories(aitracker PRIVATE ${CMAKE_SOURCE_DIR}/include ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(aitracker PRIVATE ${OpenCV_LIBS})

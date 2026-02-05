@@ -113,11 +113,30 @@ void Application::detectionThreadFunc() {
  * @return true if initialization successful, false otherwise
  */
 bool Application::init(int argc, char** argv) {
-    // Parse command line arguments
-    backbonePath = "../models/nanotrack_backbone_sim.onnx";
-    neckheadPath = "../models/nanotrack_head_sim.onnx";
-    yoloPath = "../models/yolo11n.onnx";
+    // Try to load config file
+    // Look for config in common locations
+    std::vector<std::string> configPaths = {
+        "config/aitracker.yaml",
+        "../config/aitracker.yaml",
+        "aitracker.yaml"
+    };
 
+    for (const auto& path : configPaths) {
+        if (config.loadFromFile(path)) {
+            break;
+        }
+    }
+
+    // Apply config settings
+    backbonePath = config.backbonePath;
+    neckheadPath = config.neckheadPath;
+    yoloPath = config.yoloPath;
+    targetFps = config.targetFps;
+    showTrajectoryMap = config.showTrajectoryMap;
+    autoTrackDetections = config.autoTrackDetections;
+    detectionInterval = config.detectionInterval;
+
+    // Parse command line arguments (override config)
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <video_source> [yolo_model] [backbone] [neckhead]" << std::endl;
         std::cerr << "  video_source: path to video file or '0' for webcam" << std::endl;
@@ -132,6 +151,9 @@ bool Application::init(int argc, char** argv) {
         neckheadPath = argv[4];
     }
 
+    // Print loaded config
+    config.print();
+
     // Open video
     if (videoSource == "0") {
         cap.open(0);
@@ -144,20 +166,24 @@ bool Application::init(int argc, char** argv) {
         return false;
     }
 
-    // Configure tracker manager
+    // Configure tracker manager with config settings
     trackerManager.setModelPaths(backbonePath, neckheadPath);
+    trackerManager.setMaxLostFrames(config.maxLostFrames);
+    trackerManager.setMinIoU(config.minIoU);
+    trackerManager.setMaxTrajectoryLength(config.maxTrajectoryLength);
+    trackerManager.setClassFilter(config.allowedClasses, config.blockedClasses);
 
     // Try to load YOLO detector (optional)
-    if (detector.load(yoloPath)) {
-        detector.setConfidenceThreshold(0.5f);
-        detector.setInputSize(640);
+    if (detector.load(yoloPath, config.classesPath)) {
+        detector.setConfidenceThreshold(config.detectionConfidence);
+        detector.setNmsThreshold(config.nmsThreshold);
+        detector.setInputSize(config.inputSize);
         detector.tryEnableGPU();  // Try GPU acceleration
         detectionEnabled = true;
-        autoTrackDetections = true;  // Auto-track detected objects by default
-        std::cout << "YOLO detection enabled with auto-tracking (" << detector.getBackendName() << ")" << std::endl;
+        std::cout << "YOLO detection enabled (" << detector.getBackendName() << ")" << std::endl;
     } else {
         std::cout << "YOLO model not found, detection disabled" << std::endl;
-        std::cout << "To enable: place yolo11n.onnx in models/ folder" << std::endl;
+        std::cout << "To enable: place model in models/onnx/ folder" << std::endl;
     }
 
     // Read first frame
