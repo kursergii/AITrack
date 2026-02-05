@@ -15,7 +15,7 @@ Real-time multi-object tracking combining YOLO detection with NanoTracker visual
 - **YAML Configuration**: Runtime-configurable settings without recompiling
 - **Class Filtering**: Allow/block specific object classes for targeted tracking
 
-## Requirements
+## Requirements. 
 
 - CMake 3.10+
 - C++17 compiler
