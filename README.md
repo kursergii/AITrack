@@ -33,7 +33,7 @@ cmake ..
 make
 ```
 
-The executable will be in `bin/aitracker`.
+The executable will be in `bin/aitracker`. 
 
 ## Models
 
