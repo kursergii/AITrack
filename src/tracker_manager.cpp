@@ -173,11 +173,34 @@ void TrackerManager::updateUnmatchedTracks(const std::vector<bool>& trackMatched
 }
 
 /// Stage 5: Create new tracks for unmatched detections
+/// Skips detections that are near an existing track (even if IoU didn't match)
 void TrackerManager::createNewTracks(const cv::Mat& frame,
                                       const std::vector<Detector::Detection>& detections,
                                       const std::vector<bool>& detectionMatched) {
     for (size_t i = 0; i < detections.size(); i++) {
-        if (!detectionMatched[i] && shouldTrackClass(detections[i].className)) {
+        if (detectionMatched[i]) continue;
+        if (!shouldTrackClass(detections[i].className)) continue;
+
+        // Check if any existing track is already near this detection
+        cv::Point2f detCenter(detections[i].bbox.x + detections[i].bbox.width / 2.0f,
+                              detections[i].bbox.y + detections[i].bbox.height / 2.0f);
+        bool tooClose = false;
+        for (const auto& track : trackedObjects) {
+            if (!track.active) continue;
+            cv::Point2f trackCenter(track.bbox.x + track.bbox.width / 2.0f,
+                                    track.bbox.y + track.bbox.height / 2.0f);
+            float dist = cv::norm(detCenter - trackCenter);
+            float maxDim = static_cast<float>(std::max({
+                detections[i].bbox.width, detections[i].bbox.height,
+                track.bbox.width, track.bbox.height
+            }));
+            if (dist < maxDim * 2.0f) {
+                tooClose = true;
+                break;
+            }
+        }
+
+        if (!tooClose) {
             createTrack(frame, detections[i]);
         }
     }

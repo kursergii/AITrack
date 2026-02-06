@@ -11,8 +11,8 @@ tracker:
 
 # Detection settings
 detection:
-  confidence: 0.4            # YOLO confidence threshold
-  nms_threshold: 0.45        # Non-maximum suppression threshold
+  confidence: 0.5            # YOLO confidence threshold
+  nms_threshold: 0.3         # Non-maximum suppression threshold (lower = fewer duplicates)
   interval: 10               # Run detection every N frames
   input_size: 640            # YOLO input size
 

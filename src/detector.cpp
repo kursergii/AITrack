@@ -346,6 +346,8 @@ std::vector<Detector::Detection> Detector::postprocess(const cv::Mat& frame,
     std::vector<int> indices;
     cv::dnn::NMSBoxes(boxes, confidences, confidenceThreshold, nmsThreshold, indices);
 
+    // Collect NMS survivors
+    std::vector<Detection> nmsDetections;
     for (int idx : indices) {
         Detection det;
         det.bbox = boxes[idx];
@@ -358,7 +360,42 @@ std::vector<Detector::Detection> Detector::postprocess(const cv::Mat& frame,
             det.className = "class_" + std::to_string(det.classId);
         }
 
-        detections.push_back(det);
+        nmsDetections.push_back(det);
+    }
+
+    // Post-NMS merge: suppress nearby same-class detections using distance.
+    // If centers are closer than the size of the larger box, keep only the
+    // higher-confidence one.
+    std::vector<bool> suppressed(nmsDetections.size(), false);
+    for (size_t i = 0; i < nmsDetections.size(); i++) {
+        if (suppressed[i]) continue;
+        for (size_t j = i + 1; j < nmsDetections.size(); j++) {
+            if (suppressed[j]) continue;
+            if (nmsDetections[i].classId != nmsDetections[j].classId) continue;
+
+            cv::Point2f ci(nmsDetections[i].bbox.x + nmsDetections[i].bbox.width / 2.0f,
+                           nmsDetections[i].bbox.y + nmsDetections[i].bbox.height / 2.0f);
+            cv::Point2f cj(nmsDetections[j].bbox.x + nmsDetections[j].bbox.width / 2.0f,
+                           nmsDetections[j].bbox.y + nmsDetections[j].bbox.height / 2.0f);
+
+            float dist = cv::norm(ci - cj);
+            float maxDim = static_cast<float>(std::max({
+                nmsDetections[i].bbox.width, nmsDetections[i].bbox.height,
+                nmsDetections[j].bbox.width, nmsDetections[j].bbox.height
+            }));
+
+            if (dist < maxDim * 2.0f) {
+                if (nmsDetections[i].confidence >= nmsDetections[j].confidence)
+                    suppressed[j] = true;
+                else
+                    suppressed[i] = true;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < nmsDetections.size(); i++) {
+        if (!suppressed[i])
+            detections.push_back(nmsDetections[i]);
     }
 
     return detections;
