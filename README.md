@@ -14,6 +14,7 @@ Real-time multi-object tracking combining YOLO detection with NanoTracker visual
 - **GPU Acceleration**: Automatic CUDA/OpenCL backend selection
 - **YAML Configuration**: Runtime-configurable settings without recompiling
 - **Class Filtering**: Allow/block specific object classes for targeted tracking
+- **Video Recording**: Save output video with all tracking visualizations
 
 ## Requirements. 
 
@@ -43,8 +44,10 @@ Place the following ONNX models in the `models/` folder:
 |-------|-------------|
 | `nanotrack_backbone_sim.onnx` | NanoTracker backbone network |
 | `nanotrack_head_sim.onnx` | NanoTracker head network |
-| `yolo11n.onnx` | YOLO detector (general objects) |
-| `drones.onnx` | YOLO detector (drone-specific, optional) |
+| `yolo11n.onnx` | YOLO detector (general objects, 80 COCO classes) |
+| `drones.onnx` | YOLO detector (drone-specific, 1 class) |
+
+Each YOLO model needs a matching `.names` file (one class name per line) in the `models/` folder. For example, `drones.names` for `drones.onnx` and `yolo11n.names` for `yolo11n.onnx`. Set the path in config via `models.classes_file`. If no classes file is provided, COCO class names are used as default.
 
 NanoTracker models are required for tracking. YOLO model is optional - without it, you can manually select objects to track.
 
@@ -137,8 +140,12 @@ display:
 
 models:
   yolo: models/drones.onnx
+  classes_file: models/drones.names
   nanotrack_backbone: models/nanotrack_backbone_sim.onnx
   nanotrack_head: models/nanotrack_head_sim.onnx
+
+output:
+  video: ""                  # Path to save output video (empty = disabled)
 
 classes:
   allowed: ["drone"]         # Only track these classes (empty = all)
@@ -163,6 +170,7 @@ Application
     │   ├── Forward (CUDA/OpenCL/CPU)
     │   └── Postprocess (NMS)
     ├── CameraMotion (sparse optical flow)
+    ├── VideoWriter (optional output recording)
     └── Visualization
         ├── Predicted paths
         ├── Motion indicators (camera + object)
@@ -183,6 +191,7 @@ Application
 5. **Motion Analysis**: Compute object motion with camera compensation
 6. **Prediction**: Kalman filter predicts future positions with velocity smoothing
 7. **Render**: Draw bounding boxes, predictions, motion indicators, and trajectory map
+8. **Record** (optional): Write rendered frame to output video file
 
 ## File Structure
 

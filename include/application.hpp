@@ -53,6 +53,7 @@ private:
 
     // Video
     cv::VideoCapture cap;
+    cv::VideoWriter writer;
     cv::Mat frame;
     std::string videoSource;
 

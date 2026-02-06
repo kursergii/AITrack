@@ -48,6 +48,9 @@ struct Config {
     std::string classesPath;  // Path to class names file (one per line); empty = COCO defaults
     std::string videoSource = "../videos/car1.mp4";
 
+    // Output
+    std::string outputPath;   // Path to save output video (empty = no recording)
+
     // Helper to check if a class should be tracked
     bool shouldTrackClass(const std::string& className) const {
         // If blocked, never track
@@ -110,6 +113,12 @@ struct Config {
             if (!models["nanotrack_backbone"].empty()) models["nanotrack_backbone"] >> backbonePath;
             if (!models["nanotrack_head"].empty()) models["nanotrack_head"] >> neckheadPath;
             if (!models["classes_file"].empty()) models["classes_file"] >> classesPath;
+        }
+
+        // Output
+        if (!fs["output"].empty()) {
+            cv::FileNode output = fs["output"];
+            if (!output["video"].empty()) output["video"] >> outputPath;
         }
 
         // Class filtering

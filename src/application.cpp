@@ -24,6 +24,10 @@ Application::Application()
 
 Application::~Application() {
     stopDetectionThread();
+    if (writer.isOpened()) {
+        writer.release();
+        std::cout << "Output video saved" << std::endl;
+    }
     cap.release();
     cv::destroyAllWindows();
 }
@@ -191,6 +195,19 @@ bool Application::init(int argc, char** argv) {
     if (frame.empty()) {
         std::cerr << "Error: Cannot read first frame" << std::endl;
         return false;
+    }
+
+    // Open video writer if output path is configured
+    if (!config.outputPath.empty()) {
+        int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+        double fps = cap.get(cv::CAP_PROP_FPS);
+        if (fps <= 0) fps = targetFps;
+        writer.open(config.outputPath, fourcc, fps, frame.size());
+        if (writer.isOpened()) {
+            std::cout << "Recording to: " << config.outputPath << std::endl;
+        } else {
+            std::cerr << "Warning: Could not open output video: " << config.outputPath << std::endl;
+        }
     }
 
     // If detection enabled, show detections first, otherwise select ROI manually
@@ -449,6 +466,11 @@ void Application::render() {
     renderTrajectoryMap();
 
     cv::imshow("AITrack - Multi-Object Tracker", frame);
+
+    // Write frame to output video
+    if (writer.isOpened()) {
+        writer.write(frame);
+    }
 }
 
 // ============================================================================

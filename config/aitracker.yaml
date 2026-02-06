@@ -24,10 +24,14 @@ display:
 
 # Model paths (relative to AITrack project root or absolute)
 models:
-  yolo: models/yolo11n.onnx
+  yolo: models/drones.onnx
+  classes_file: models/drones.names
   nanotrack_backbone: models/nanotrack_backbone_sim.onnx
   nanotrack_head: models/nanotrack_head_sim.onnx
-  classes_file: models/drones.names
+
+# Output (empty = no recording)
+output:
+  video: ""                  # Path to save output video (e.g., "output.mp4")
 
 # Class filtering (empty = track all)
 classes:
